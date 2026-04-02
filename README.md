@@ -155,3 +155,6 @@ Now `git diff` will show meaningful changes!
 
 - Python 3.6+
 - No external dependencies (uses only standard library)
+
+## Stargazers over time
+[![Stargazers over time](https://starchart.cc/arturmartins/spdx-sorter.svg?variant=adaptive)](https://starchart.cc/arturmartins/spdx-sorter)
