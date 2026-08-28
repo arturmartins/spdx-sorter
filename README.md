@@ -1,3 +1,5 @@
+
+
 # SPDX JSON Sorter
 
 Sort SPDX JSON files deterministically for meaningful git diffs.
@@ -5,7 +7,6 @@ Sort SPDX JSON files deterministically for meaningful git diffs.
 ## Overview
 
 When working with SPDX Software Bill of Materials (SBOM) files in JSON format, changes can often lead to large, unhelpful diffs due to unordered keys and arrays. This script sorts SPDX JSON files in a consistent manner, ensuring that only meaningful changes are highlighted in git.
-
 
 
 
@@ -22,6 +23,7 @@ When working with SPDX Software Bill of Materials (SBOM) files in JSON format, c
   - `checksums` → by algorithm, checksumValue
   - `annotations` → by annotationDate, annotator
   - `elements` (SPDX 3.x) → by spdxId, type, name
+  - `hasExtractedLicensingInfos` → by licenseId, then name
   - And more...
 
 ## Supported SPDX Versions
