@@ -40,7 +40,12 @@ Changelog = "https://github.com/arturmartins/spdx-sorter/releases"
 Documentation = "https://github.com/arturmartins/spdx-sorter#readme"
 
 [dependency-groups]
-test = ["hypothesis>=6.100,<7", "jsonschema>=4.23,<5", "pytest>=8,<10"]
+test = [
+  "hypothesis>=6.100,<7",
+  "jsonschema>=4.23,<5",
+  "pytest>=8,<10",
+  "tomli>=2,<3; python_version < '3.11'",
+]
 lint = ["ruff>=0.12,<1"]
 type = ["mypy>=1.17,<2"]
 coverage = ["coverage[toml]>=7.6,<8"]

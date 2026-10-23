@@ -2000,6 +2000,7 @@ test = [
     { name = "hypothesis" },
     { name = "jsonschema" },
     { name = "pytest" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
 type = [
     { name = "mypy" },
@@ -2025,6 +2026,7 @@ test = [
     { name = "hypothesis", specifier = ">=6.100,<7" },
     { name = "jsonschema", specifier = ">=4.23,<5" },
     { name = "pytest", specifier = ">=8,<10" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2,<3" },
 ]
 type = [{ name = "mypy", specifier = ">=1.17,<2" }]
 
