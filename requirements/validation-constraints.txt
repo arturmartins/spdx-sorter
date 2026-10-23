@@ -7,7 +7,7 @@ click==8.5.0
 license-expression==30.4.4
 ply==3.11
 PyYAML==6.0.3
-pyparsing==3.3.2
+pyparsing==3.3.3
 rdflib==7.6.0
 semantic-version==2.10.0
 spdx-tools==0.8.5
