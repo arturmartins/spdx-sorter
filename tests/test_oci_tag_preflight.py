@@ -48,14 +48,27 @@ class FakeResponse:
         return self.body
 
 
+_created_errors: list[HTTPError] = []
+
+
+@pytest.fixture(autouse=True)
+def _close_http_errors():
+    """Close fabricated errors; Python 3.14 warns when unclosed ones are collected."""
+    yield
+    while _created_errors:
+        _created_errors.pop().close()
+
+
 def http_error(status: int, body: bytes = b"") -> HTTPError:
-    return HTTPError(
+    error = HTTPError(
         url="https://example.invalid/v2/repo/manifests/1.2.3",
         code=status,
         msg="error",
         hdrs=Message(),
         fp=BytesIO(body),
     )
+    _created_errors.append(error)
+    return error
 
 
 def opener_for(*items: FakeResponse | BaseException):
