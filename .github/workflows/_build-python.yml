@@ -1,0 +1,126 @@
+name: Build and attest Python distributions
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Immutable Release Please tag (v<version>) to build.
+        required: true
+        type: string
+      version:
+        description: Package version expected in pyproject.toml.
+        required: true
+        type: string
+    outputs:
+      artifact-name:
+        description: Workflow artifact holding the tested distributions and checksums.
+        value: ${{ jobs.build.outputs.artifact-name }}
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      artifact-name: ${{ steps.artifact.outputs.artifact-name }}
+    steps:
+      - name: Check out the immutable release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate canonical release inputs
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: python scripts/validate_release.py "${RELEASE_TAG}" "${RELEASE_VERSION}"
+      - name: Verify checked-out tag and package version
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -eu
+          test "$(git describe --exact-match --tags HEAD)" = "${RELEASE_TAG}"
+          PACKAGE_VERSION="$(python - <<'PY'
+          import tomllib
+          with open("pyproject.toml", "rb") as handle:
+              print(tomllib.load(handle)["project"]["version"])
+          PY
+          )"
+          test "${PACKAGE_VERSION}" = "${RELEASE_VERSION}"
+      - name: Set up the release Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.7"
+          enable-cache: true
+      - name: Test, build, and inspect distributions once
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -eu
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
+          uv sync --frozen --group test --group build --extra validation
+          uv run --no-sync python -m pytest
+          rm -rf dist
+          uv run --no-sync python -m build --no-isolation --outdir dist
+          wheel_count="$(find dist -maxdepth 1 -type f -name '*.whl' | wc -l)"
+          source_count="$(find dist -maxdepth 1 -type f -name '*.tar.gz' | wc -l)"
+          test "${wheel_count}" -eq 1
+          test "${source_count}" -eq 1
+          WHEEL_PATH="$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)"
+          SOURCE_PATH="$(find dist -maxdepth 1 -type f -name '*.tar.gz' -print -quit)"
+          uv run --no-sync python -m twine check dist/*
+          WHEEL_VENV="${RUNNER_TEMP}/spdx-sorter-wheel-smoke"
+          SOURCE_VENV="${RUNNER_TEMP}/spdx-sorter-source-smoke"
+          python -m venv "${WHEEL_VENV}"
+          "${WHEEL_VENV}/bin/python" -m pip install --no-deps "${WHEEL_PATH}"
+          (cd /tmp && "${WHEEL_VENV}/bin/python" -c 'import spdx_sorter; assert callable(spdx_sorter.sort_document)')
+          python -m venv "${SOURCE_VENV}"
+          "${SOURCE_VENV}/bin/python" -m pip install --no-deps "${SOURCE_PATH}"
+          (cd /tmp && "${SOURCE_VENV}/bin/python" -c 'import spdx_sorter; assert callable(spdx_sorter.sort_document)')
+          python - "${RELEASE_VERSION}" <<'PY'
+          import email
+          import sys
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          from packaging.version import Version
+
+          expected = Version(sys.argv[1])
+          wheel = next(Path("dist").glob("*.whl"))
+          with zipfile.ZipFile(wheel) as archive:
+              member = next(name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))
+              wheel_version = Version(email.message_from_bytes(archive.read(member))["Version"])
+          source = next(Path("dist").glob("*.tar.gz"))
+          with tarfile.open(source) as archive:
+              member = next(item for item in archive.getmembers() if item.name.endswith("/PKG-INFO"))
+              source_version = Version(email.message_from_bytes(archive.extractfile(member).read())["Version"])
+          if wheel_version != expected or source_version != expected:
+              raise SystemExit("built distribution metadata does not match the release version")
+          PY
+          sha256sum dist/*.whl dist/*.tar.gz > dist/SHA256SUMS-python.txt
+      - name: Attest the built wheel and source distribution
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
+      - name: Upload tested release distributions once
+        id: artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: python-release-${{ inputs.version }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14

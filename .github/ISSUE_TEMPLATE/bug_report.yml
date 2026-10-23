@@ -1,0 +1,28 @@
+name: Bug report
+description: Report reproducible incorrect behavior.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not include secrets or unredacted sensitive SPDX documents. Security issues belong in SECURITY.md's private reporting path."
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Actual and expected behavior
+      description: Explain the observable difference.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Include commands, a minimal redacted input, and output.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: SPDX Sorter and Python versions
+    validations:
+      required: true

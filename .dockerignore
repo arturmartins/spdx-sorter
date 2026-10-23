@@ -1,0 +1,12 @@
+# Start from an empty context. The Dockerfile explicitly copies this allowlist.
+*
+!Dockerfile
+!.dockerignore
+!LICENSE
+!README.md
+!pyproject.toml
+!requirements/
+!requirements/build-constraints.txt
+!requirements/validation-constraints.txt
+!src/
+!src/**

@@ -1,0 +1,41 @@
+{
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "creationInfo": {
+    "created": "2024-01-02T03:04:05Z",
+    "creators": [
+      "Tool: ScanCode Toolkit 32.0.0"
+    ]
+  },
+  "dataLicense": "CC0-1.0",
+  "documentNamespace": "https://example.invalid/scancode/fixture",
+  "files": [
+    {
+      "SPDXID": "SPDXRef-File-z",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "bbbb"
+        },
+        {
+          "algorithm": "SHA1",
+          "checksumValue": "aaaa"
+        }
+      ],
+      "fileName": "z.py",
+      "licenseInfoInFiles": [
+        "MIT",
+        "Apache-2.0"
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-File-a",
+      "fileName": "a.py",
+      "licenseInfoInFiles": [
+        "Apache-2.0",
+        "MIT"
+      ]
+    }
+  ],
+  "name": "ScanCode compatibility fixture",
+  "spdxVersion": "SPDX-2.3"
+}

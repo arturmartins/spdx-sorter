@@ -1,0 +1,29 @@
+# Default review owner. GitHub applies this only after branch/ruleset controls
+# requiring code-owner review are configured by a maintainer.
+* @arturmartins
+
+# Core package and behavioral tests
+/src/spdx_sorter/ @arturmartins
+/tests/ @arturmartins
+
+# Packaging, dependencies, and container construction
+/pyproject.toml @arturmartins
+/requirements/ @arturmartins
+/Dockerfile @arturmartins
+/.dockerignore @arturmartins
+
+# Automation, releases, and supply-chain configuration
+/.github/workflows/ @arturmartins
+/.github/dependabot.yml @arturmartins
+/release-please-config.json @arturmartins
+/.release-please-manifest.json @arturmartins
+/scripts/validate_release.py @arturmartins
+
+# Security and governance
+/SECURITY.md @arturmartins
+/CODE_OF_CONDUCT.md @arturmartins
+/CONTRIBUTING.md @arturmartins
+/docs/REPOSITORY_SETUP.md @arturmartins
+/docs/plan/governance.md @arturmartins
+/docs/plan/release-management.md @arturmartins
+/docs/plan/supply-chain-security.md @arturmartins

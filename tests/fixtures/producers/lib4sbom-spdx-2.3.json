@@ -1,0 +1,57 @@
+{
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "creationInfo": {
+    "created": "2023-01-24T13:51:36Z",
+    "creators": [
+      "Tool: lib4sbom-0.5.2"
+    ]
+  },
+  "dataLicense": "CC0-1.0",
+  "documentNamespace": "https://example.invalid/lib4sbom/fixture",
+  "name": "lib4sbom compatibility fixture",
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-2-distlib",
+      "downloadLocation": "NONE",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/distlib@0.3.6",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": "false",
+      "licenseConcluded": "NOASSERTION",
+      "name": "distlib",
+      "versionInfo": "0.3.6"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-1-virtualenv",
+      "downloadLocation": "NONE",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/virtualenv@20.16.7",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": "false",
+      "licenseConcluded": "MIT",
+      "name": "virtualenv",
+      "versionInfo": "20.16.7"
+    }
+  ],
+  "relationships": [
+    {
+      "relatedSpdxElement": "SPDXRef-Package-2-distlib",
+      "relationshipType": "DESCRIBES",
+      "spdxElementId": "SPDXRef-DOCUMENT"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-1-virtualenv",
+      "relationshipType": "DESCRIBES",
+      "spdxElementId": "SPDXRef-DOCUMENT"
+    }
+  ],
+  "spdxVersion": "SPDX-2.3"
+}

@@ -1,0 +1,37 @@
+name: PR title
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  conventional-commit:
+    name: Conventional Commit title
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate squash-merge title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import sys
+
+          title = os.environ["PR_TITLE"]
+          expression = re.compile(
+              r"^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)"
+              r"(?:\([^)\r\n]+\))?!?: .+"
+          )
+          if not expression.fullmatch(title):
+              print(
+                  "PR title must be a Conventional Commit, for example: "
+                  "feat(parser): add SPDX 3 support",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+          PY

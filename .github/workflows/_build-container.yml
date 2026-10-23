@@ -1,0 +1,348 @@
+name: Build and attest container image
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Immutable Release Please tag (v<version>) to build.
+        required: true
+        type: string
+      version:
+        description: Package version expected in pyproject.toml.
+        required: true
+        type: string
+    outputs:
+      artifact-name:
+        description: Workflow artifact holding the final-image SPDX SBOM and checksum.
+        value: ${{ jobs.build.outputs.artifact-name }}
+      digest:
+        description: Canonical GHCR multi-platform manifest digest.
+        value: ${{ jobs.build.outputs.digest }}
+
+permissions: {}
+
+# This group lives only in the called workflow: the caller must not take it too,
+# or it could block its own reusable-workflow invocation.
+concurrency:
+  group: container-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      packages: write
+    env:
+      GHCR_IMAGE: ghcr.io/arturmartins/spdx-sorter
+      TEMP_TAG: build-${{ github.run_id }}-${{ github.run_attempt }}
+    outputs:
+      artifact-name: ${{ steps.artifact.outputs.artifact-name }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - name: Check out the immutable release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate canonical release inputs
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: python scripts/validate_release.py "${RELEASE_TAG}" "${RELEASE_VERSION}"
+      - name: Capture the exact tagged commit
+        id: exact-commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+      - name: Verify checked-out tag and package version
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -eu
+          test "$(git describe --exact-match --tags HEAD)" = "${RELEASE_TAG}"
+          PACKAGE_VERSION="$(python - <<'PY'
+          import tomllib
+          with open("pyproject.toml", "rb") as handle:
+              print(tomllib.load(handle)["project"]["version"])
+          PY
+          )"
+          test "${PACKAGE_VERSION}" = "${RELEASE_VERSION}"
+      - name: Compute container release tags
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: python scripts/container_tags.py "${RELEASE_VERSION}" container-tags.txt
+      - name: Set up QEMU for non-native platforms
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push only a run-specific temporary identity
+        id: push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          provenance: mode=max
+          tags: |
+            ${{ env.GHCR_IMAGE }}:${{ env.TEMP_TAG }}
+          build-args: |
+            VERSION=${{ inputs.version }}
+            VCS_REF=${{ steps.exact-commit.outputs.sha }}
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+      - name: Verify the temporary image carries the release version label
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_COMMIT: ${{ steps.exact-commit.outputs.sha }}
+          BUILD_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -eu
+          test "$(docker buildx imagetools inspect "${GHCR_IMAGE}:${TEMP_TAG}" --format '{{index .Image.Config.Labels "org.opencontainers.image.version"}}')" = "${RELEASE_VERSION}"
+          test "$(docker buildx imagetools inspect "${GHCR_IMAGE}:${TEMP_TAG}" --format '{{index .Image.Config.Labels "org.opencontainers.image.revision"}}')" = "${RELEASE_COMMIT}"
+      - name: Preflight GHCR immutable release tag through registry API
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          BUILD_DIGEST: ${{ steps.push.outputs.digest }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          python scripts/oci_tag_preflight.py \
+            --registry ghcr.io \
+            --repository arturmartins/spdx-sorter \
+            --tag "${RELEASE_VERSION}" \
+            --expected-digest "${BUILD_DIGEST}" \
+            --username-env REGISTRY_USERNAME \
+            --password-env REGISTRY_PASSWORD
+      - name: Promote verified GHCR digest to the exact release tag
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          BUILD_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -eu
+          docker buildx imagetools create --tag "${GHCR_IMAGE}:${RELEASE_VERSION}" "${GHCR_IMAGE}@${BUILD_DIGEST}"
+      - name: Verify the GHCR exact release tag resolves to the build digest
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          BUILD_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -eu
+          digest="$(docker buildx imagetools inspect "${GHCR_IMAGE}:${RELEASE_VERSION}" --format '{{.Manifest.Digest}}')"
+          test "${digest}" = "${BUILD_DIGEST}"
+      - name: Promote GHCR stable floating aliases
+        env:
+          BUILD_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -eu
+          tail -n +2 container-tags.txt | while IFS= read -r tag; do
+            test -n "${tag}"
+            docker buildx imagetools create --tag "${GHCR_IMAGE}:${tag}" "${GHCR_IMAGE}@${BUILD_DIGEST}"
+          done
+      - name: Verify GHCR promoted tags resolve to the build digest
+        env:
+          BUILD_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -eu
+          while IFS= read -r tag; do
+            test -n "${tag}"
+            digest="$(docker buildx imagetools inspect "${GHCR_IMAGE}:${tag}" --format '{{.Manifest.Digest}}')"
+            test "${digest}" = "${BUILD_DIGEST}"
+          done < container-tags.txt
+      - name: Generate the final-image SPDX JSON SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ env.GHCR_IMAGE }}@${{ steps.push.outputs.digest }}
+          format: spdx-json
+          output-file: spdx-sorter-${{ inputs.version }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Attest GHCR image provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.GHCR_IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+      - name: Attest GHCR final-image SPDX SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.GHCR_IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          sbom-path: spdx-sorter-${{ inputs.version }}.spdx.json
+          push-to-registry: true
+          create-storage-record: false
+      - name: Record canonical container metadata
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          BUILD_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -eu
+          {
+            printf 'version=%s\n' "${RELEASE_VERSION}"
+            printf 'ghcr_image=%s\n' "${GHCR_IMAGE}"
+            printf 'digest=%s\n' "${BUILD_DIGEST}"
+          } > container-metadata.txt
+      - name: Checksum transferred release metadata
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -eu
+          sha256sum \
+            "spdx-sorter-${RELEASE_VERSION}.spdx.json" \
+            container-metadata.txt \
+            container-tags.txt > SHA256SUMS-container.txt
+      - name: Upload final-image SBOM once
+        id: artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: container-release-${{ inputs.version }}
+          path: |
+            spdx-sorter-${{ inputs.version }}.spdx.json
+            SHA256SUMS-container.txt
+            container-metadata.txt
+            container-tags.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  docker-hub:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: docker-hub
+      url: https://hub.docker.com/r/arturmartins/spdx-sorter
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      packages: read
+    env:
+      GHCR_IMAGE: ghcr.io/arturmartins/spdx-sorter
+      DOCKER_IMAGE: docker.io/arturmartins/spdx-sorter
+      BUILD_DIGEST: ${{ needs.build.outputs.digest }}
+    steps:
+      - name: Check out the immutable release tag for release helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Download final-image SBOM and canonical metadata
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: ${{ needs.build.outputs.artifact-name }}
+          path: container-release
+      - name: Verify downloaded container metadata and checksums
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -eu
+          cd container-release
+          sha256sum --check SHA256SUMS-container.txt
+          test "$(awk 'END {print NR}' SHA256SUMS-container.txt)" = "3"
+          test "$(awk 'END {print NR}' container-metadata.txt)" = "3"
+          test "$(awk -F= '$1 == "version" {print $2}' container-metadata.txt)" = "${RELEASE_VERSION}"
+          test "$(awk -F= '$1 == "ghcr_image" {print $2}' container-metadata.txt)" = "${GHCR_IMAGE}"
+          test "$(awk -F= '$1 == "digest" {print $2}' container-metadata.txt)" = "${BUILD_DIGEST}"
+          printf '%s\n' "${BUILD_DIGEST}" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          test "$(sed -n '1p' container-tags.txt)" = "${RELEASE_VERSION}"
+
+          expected_tags="$(mktemp)"
+          printf '%s\n' "${RELEASE_VERSION}" > "${expected_tags}"
+          case "${RELEASE_VERSION}" in
+            *-*) ;;
+            *)
+              major="${RELEASE_VERSION%%.*}"
+              rest="${RELEASE_VERSION#*.}"
+              minor="${rest%%.*}"
+              {
+                printf '%s.%s\n' "${major}" "${minor}"
+                printf '%s\n' "${major}"
+                printf 'latest\n'
+              } >> "${expected_tags}"
+              ;;
+          esac
+          cmp -s "${expected_tags}" container-tags.txt
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - name: Log in to GitHub Container Registry for canonical digest reads
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.4.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Verify canonical GHCR digest before Docker Hub publication
+        run: |
+          set -eu
+          digest="$(docker buildx imagetools inspect "${GHCR_IMAGE}@${BUILD_DIGEST}" --format '{{.Manifest.Digest}}')"
+          test "${digest}" = "${BUILD_DIGEST}"
+      - name: Preflight Docker Hub immutable release tag through registry API
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          REGISTRY_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -eu
+          python scripts/oci_tag_preflight.py \
+            --registry docker.io \
+            --repository arturmartins/spdx-sorter \
+            --tag "${RELEASE_VERSION}" \
+            --expected-digest "${BUILD_DIGEST}" \
+            --username-env REGISTRY_USERNAME \
+            --password-env REGISTRY_PASSWORD
+      - name: Copy canonical GHCR digest to Docker Hub exact tag
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -eu
+          docker buildx imagetools create --tag "${DOCKER_IMAGE}:${RELEASE_VERSION}" "${GHCR_IMAGE}@${BUILD_DIGEST}"
+      - name: Verify Docker Hub exact release tag resolves to the canonical digest
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -eu
+          digest="$(docker buildx imagetools inspect "${DOCKER_IMAGE}:${RELEASE_VERSION}" --format '{{.Manifest.Digest}}')"
+          test "${digest}" = "${BUILD_DIGEST}"
+      - name: Promote Docker Hub stable floating aliases
+        run: |
+          set -eu
+          tail -n +2 container-release/container-tags.txt | while IFS= read -r tag; do
+            test -n "${tag}"
+            docker buildx imagetools create --tag "${DOCKER_IMAGE}:${tag}" "${GHCR_IMAGE}@${BUILD_DIGEST}"
+          done
+      - name: Verify Docker Hub promoted tags resolve to the canonical digest
+        run: |
+          set -eu
+          while IFS= read -r tag; do
+            test -n "${tag}"
+            digest="$(docker buildx imagetools inspect "${DOCKER_IMAGE}:${tag}" --format '{{.Manifest.Digest}}')"
+            test "${digest}" = "${BUILD_DIGEST}"
+          done < container-release/container-tags.txt
+      - name: Attest Docker Hub image provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.DOCKER_IMAGE }}
+          subject-digest: ${{ env.BUILD_DIGEST }}
+          push-to-registry: true
+          create-storage-record: false
+      - name: Attest Docker Hub final-image SPDX SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.DOCKER_IMAGE }}
+          subject-digest: ${{ env.BUILD_DIGEST }}
+          sbom-path: container-release/spdx-sorter-${{ inputs.version }}.spdx.json
+          push-to-registry: true
+          create-storage-record: false

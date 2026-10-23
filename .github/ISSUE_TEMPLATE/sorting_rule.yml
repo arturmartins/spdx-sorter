@@ -1,0 +1,26 @@
+name: Sorting-rule proposal
+description: Propose a deterministic SPDX ordering rule.
+title: "feat(sorter): "
+labels: [sorting-rule]
+body:
+  - type: textarea
+    id: rule
+    attributes:
+      label: Proposed rule and rationale
+      description: State which SPDX version and property are affected, and why order is semantically insignificant.
+    validations:
+      required: true
+  - type: textarea
+    id: examples
+    attributes:
+      label: Before and after examples
+      description: Include a minimal SPDX-shaped JSON example and expected canonical result.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Specification or fixture evidence
+      description: Link to the relevant official SPDX source or explain producer compatibility evidence.
+    validations:
+      required: true

@@ -1,0 +1,184 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lock:
+    name: Lockfile freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.7"
+          enable-cache: true
+      - name: Check lockfile freshness
+        run: uv lock --check
+
+  linux:
+    name: Linux / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.7"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - name: Install test dependencies
+        run: uv sync --frozen --group test --extra validation
+      - name: Test
+        run: uv run --no-sync python -m pytest
+
+  prerelease:
+    name: Linux / Python 3.15 prerelease
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.15-dev"
+          version: "0.12.7"
+          enable-cache: true
+      - name: Install and test base package
+        run: uv sync --frozen --group test --extra validation
+      - name: Test
+        run: uv run --no-sync python -m pytest
+
+  platform:
+    name: ${{ matrix.os }} / Python 3.14
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.7"
+          python-version: "3.14"
+          enable-cache: true
+      - name: Install test dependencies
+        run: uv sync --frozen --group test --extra validation
+      - name: Test
+        run: uv run --no-sync python -m pytest
+
+  quality:
+    name: Quality and coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.7"
+          python-version: "3.14"
+          enable-cache: true
+      - name: Install quality dependencies
+        run: uv sync --frozen --group test --group lint --group type --group coverage --extra validation
+      - name: Format and lint
+        run: |
+          uv run --no-sync ruff format --check .
+          uv run --no-sync ruff check .
+      - name: Type check production code
+        run: uv run --no-sync mypy
+      - name: Test with line and branch coverage gates
+        run: |
+          uv run --no-sync coverage run -m pytest
+          uv run --no-sync coverage report
+          uv run --no-sync coverage json -o coverage.json
+          uv run --no-sync python -c "import json; totals = json.load(open('coverage.json', encoding='utf-8'))['totals']; lines = totals['covered_lines'] / totals['num_statements'] * 100; branches = totals['covered_branches'] / totals['num_branches'] * 100; print(f'Line coverage: {lines:.2f}%'); print(f'Branch coverage: {branches:.2f}%'); raise SystemExit(lines < 95 or branches < 90)"
+
+  package:
+    name: Package build and metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.7"
+          python-version: "3.14"
+          enable-cache: true
+      - name: Build and inspect distributions
+        run: |
+          uv sync --frozen --group build
+          uv run --no-sync python -m build --no-isolation
+          uv run --no-sync python -m twine check dist/*
+
+  installed-wheel:
+    name: Installed wheel smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.7"
+          python-version: "3.14"
+          enable-cache: true
+      - name: Build, install, and invoke wheel outside the source tree
+        run: |
+          uv sync --frozen --group build
+          uv run --no-sync python -m build --no-isolation --wheel --outdir wheelhouse
+          python -m venv /tmp/spdx-sorter-smoke
+          /tmp/spdx-sorter-smoke/bin/python -m pip install wheelhouse/*.whl
+          cd /tmp
+          /tmp/spdx-sorter-smoke/bin/python -c "import spdx_sorter; assert callable(spdx_sorter.sort_document)"
+          /tmp/spdx-sorter-smoke/bin/python -m spdx_sorter --help
+          /tmp/spdx-sorter-smoke/bin/spdx-sort --help
+
+  container:
+    name: Container artifact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build local container image
+        run: |
+          docker build \
+            --build-arg VCS_REF="${GITHUB_SHA}" \
+            --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --tag spdx-sorter:ci \
+            .
+      - name: Smoke-test container entrypoint
+        run: |
+          set -eu
+          unsorted='{"spdxVersion":"SPDX-2.3","packages":[{"SPDXID":"SPDXRef-B","name":"b"},{"SPDXID":"SPDXRef-A","name":"a"}]}'
+          sorted="$(printf '%s' "${unsorted}" | docker run --rm -i spdx-sorter:ci)"
+          printf '%s\n' "${sorted}" | grep -q '"SPDXRef-A"'
+          printf '%s\n' "${sorted}" | docker run --rm -i spdx-sorter:ci --check
+          if printf '%s\n' "${unsorted}" | docker run --rm -i spdx-sorter:ci --check; then
+            echo 'expected --check to fail for unsorted input' >&2
+            exit 1
+          fi
+          docker run --rm \
+            --mount type=bind,source="${PWD}/tests/fixtures/spdx-spec/valid/2.3-spdx-examples-example11-sbom.spdx.json",target=/work/valid.spdx.json,readonly \
+            spdx-sorter:ci --validate valid.spdx.json
+          test "$(docker image inspect --format '{{.Config.User}}' spdx-sorter:ci)" = '65532:65532'
+          printf '%s\n' "${sorted}" | docker run --rm --read-only -i spdx-sorter:ci --check
