@@ -5,4 +5,4 @@ hatchling==1.27.0
 packaging==24.2
 pathspec==0.12.1
 pluggy==1.5.0
-trove-classifiers==2025.1.15.22
+trove-classifiers==2026.9.21.13
