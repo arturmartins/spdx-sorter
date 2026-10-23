@@ -1,0 +1,8 @@
+# Resolved for the Python 3.13 container builder on 2026-08-28.
+# Update deliberately with: python -m pip install --dry-run --ignore-installed --report /tmp/hatchling-report.json 'hatchling==1.27.0'
+# Pin every direct runtime dependency selected by Hatchling on Python 3.13.
+hatchling==1.27.0
+packaging==24.2
+pathspec==0.12.1
+pluggy==1.5.0
+trove-classifiers==2025.1.15.22

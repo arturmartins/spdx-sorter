@@ -1,0 +1,169 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  repository_dispatch:
+    types: [recover-release]
+
+permissions: {}
+
+jobs:
+  release-please:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release-created: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Create or update the release pull request
+        id: release
+        uses: googleapis/release-please-action@c2a5a2bd6a758a0937f1ddb1e8950609867ed15c # v4.3.0
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  manual-recovery:
+    if: github.event_name == 'repository_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      release-created: ${{ steps.validate.outputs.release-created }}
+      tag: ${{ steps.validate.outputs.tag }}
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - name: Check out the trusted workflow revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Validate an existing immutable GitHub Release
+        id: validate
+        env:
+          RELEASE_TAG: ${{ github.event.client_payload.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          python scripts/validate_release.py "${RELEASE_TAG}" "${RELEASE_TAG#v}"
+          gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null
+          git fetch --no-tags origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          git fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"
+          TAG_COMMIT="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          git merge-base --is-ancestor "${TAG_COMMIT}" origin/main
+          {
+            printf 'release-created=true\n'
+            printf 'tag=%s\n' "${RELEASE_TAG}"
+            printf 'version=%s\n' "${RELEASE_TAG#v}"
+          } >> "${GITHUB_OUTPUT}"
+
+  build-python:
+    needs: [release-please, manual-recovery]
+    if: >-
+      ${{ always() && (needs.release-please.outputs.release-created == 'true' ||
+      needs.manual-recovery.outputs.release-created == 'true') }}
+    uses: ./.github/workflows/_build-python.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag || needs.manual-recovery.outputs.tag }}
+      version: ${{ needs.release-please.outputs.version || needs.manual-recovery.outputs.version }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+
+  build-container:
+    needs: [release-please, manual-recovery]
+    if: >-
+      ${{ always() && (needs.release-please.outputs.release-created == 'true' ||
+      needs.manual-recovery.outputs.release-created == 'true') }}
+    uses: ./.github/workflows/_build-container.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag || needs.manual-recovery.outputs.tag }}
+      version: ${{ needs.release-please.outputs.version || needs.manual-recovery.outputs.version }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      packages: write
+
+  publish-pypi:
+    needs: [release-please, manual-recovery, build-python]
+    if: >-
+      ${{ always() && needs.build-python.result == 'success' &&
+      (needs.release-please.outputs.release-created == 'true' ||
+      needs.manual-recovery.outputs.release-created == 'true') }}
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/spdx-sorter
+    permissions:
+      id-token: write
+    steps:
+      - name: Check out the trusted workflow revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Download the tested distributions without rebuilding
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: python-release-${{ needs.release-please.outputs.version || needs.manual-recovery.outputs.version }}
+          path: dist
+      - name: Prepare the PyPI upload set
+        run: |
+          set -eu
+          rm -rf pypi-dist
+          mkdir pypi-dist
+          cp dist/*.whl dist/*.tar.gz pypi-dist/
+      - name: Preflight immutable PyPI files
+        id: pypi-preflight
+        env:
+          RELEASE_VERSION: ${{ needs.release-please.outputs.version || needs.manual-recovery.outputs.version }}
+        run: python scripts/pypi_preflight.py "${RELEASE_VERSION}" pypi-dist
+      - name: Publish distributions through trusted publishing
+        if: steps.pypi-preflight.outputs.publish == 'true'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: pypi-dist/
+
+  upload-release-assets:
+    needs: [release-please, manual-recovery, build-python, build-container, publish-pypi]
+    if: >-
+      ${{ always() && needs.build-python.result == 'success' &&
+      needs.build-container.result == 'success' && needs.publish-pypi.result == 'success' &&
+      (needs.release-please.outputs.release-created == 'true' ||
+      needs.manual-recovery.outputs.release-created == 'true') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.release-please.outputs.tag || needs.manual-recovery.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download tested Python distributions
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: python-release-${{ needs.release-please.outputs.version || needs.manual-recovery.outputs.version }}
+          path: release-assets
+      - name: Download final-image SBOM and checksum
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: container-release-${{ needs.release-please.outputs.version || needs.manual-recovery.outputs.version }}
+          path: release-assets
+      - name: Attach missing release assets, rejecting immutable conflicts
+        run: |
+          set -eu
+          mkdir existing
+          for asset in release-assets/*; do
+            name="$(basename "${asset}")"
+            if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' | grep -Fqx "${name}"; then
+              gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --pattern "${name}" --dir existing
+              test "$(sha256sum "${asset}" | awk '{print $1}')" = "$(sha256sum "existing/${name}" | awk '{print $1}')"
+            else
+              gh release upload "${RELEASE_TAG}" "${asset}" --repo "${GITHUB_REPOSITORY}"
+            fi
+          done
